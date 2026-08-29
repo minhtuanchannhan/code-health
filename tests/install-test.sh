@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+IFS=$'\n\t'
+
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+installer="$project_root/install.sh"
+test_root=$(mktemp -d "${TMPDIR:-/tmp}/code-health-install-test.XXXXXX")
+trap 'rm -rf -- "$test_root"' EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$1" >&2
+  exit 1
+}
+
+assert_file() {
+  [[ -f $1 ]] || fail "expected file: $1"
+}
+
+assert_contains_line() {
+  grep -Fqx -- "$2" "$1" || fail "expected '$2' in $1"
+}
+
+assert_marker_once() {
+  local count
+  count=$(grep -Fxc -- "$2" "$1" || true)
+  [[ $count -eq 1 ]] || fail "expected one '$2' marker in $1, found $count"
+}
+
+assert_equals() {
+  [[ $1 == "$2" ]] || fail "expected '$2', got '$1'"
+}
+
+permission_bits() {
+  LC_ALL=C ls -ld "$1" | cut -c2-10
+}
+
+create_repository() {
+  mkdir -p "$1"
+  git init -q "$1"
+}
+
+test_installs_without_overwriting_and_is_repeatable() {
+  local target="$test_root/target repository"
+  local agents_permissions
+  local claude_permissions
+  local gitignore_permissions
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  printf 'existing agent guidance\n' > "$target/AGENTS.md"
+  printf 'existing Claude guidance\n' > "$target/CLAUDE.md"
+  printf 'node_modules/\n.code-health/\n' > "$target/.gitignore"
+  chmod 640 "$target/AGENTS.md"
+  chmod 600 "$target/CLAUDE.md"
+  chmod 644 "$target/.gitignore"
+  agents_permissions=$(permission_bits "$target/AGENTS.md")
+  claude_permissions=$(permission_bits "$target/CLAUDE.md")
+  gitignore_permissions=$(permission_bits "$target/.gitignore")
+  mkdir -p "$target/.claude/agents"
+  printf 'custom agent\n' > "$target/.claude/agents/custom.md"
+
+  "$installer" "$target"
+
+  assert_file "$target/.code-health/framework/README.md"
+  assert_file "$target/.code-health/framework/AGENTS.md"
+  assert_file "$target/.code-health/framework/CLAUDE.md"
+  assert_file "$target/.code-health/framework/LICENSE"
+  assert_file "$target/.code-health/framework/docs/code-health/tooling.md"
+  assert_file "$target/.code-health/framework/scripts/code-health/collect-baseline.sh"
+  assert_file "$target/.code-health/framework/.claude/skills/code-health/SKILL.md"
+  assert_file "$target/.claude/skills/code-health/SKILL.md"
+  assert_file "$target/.claude/agents/security.md"
+  assert_file "$target/.claude/agents/custom.md"
+  assert_file "$target/.code-health/framework/.codex-plugin/plugin.json"
+  cmp -s \
+    "$project_root/plugins/code-health/skills/code-health/SKILL.md" \
+    "$target/.claude/skills/code-health/SKILL.md" || \
+    fail 'installer did not install the canonical plugin skill'
+  cmp -s \
+    "$project_root/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md" || \
+    fail 'installer did not install the canonical plugin agent'
+  [[ -x $target/.code-health/framework/scripts/code-health/collect-baseline.sh ]] || \
+    fail 'installed baseline collector is not executable'
+
+  assert_contains_line "$target/AGENTS.md" 'existing agent guidance'
+  assert_contains_line "$target/CLAUDE.md" 'existing Claude guidance'
+  assert_contains_line "$target/.gitignore" 'node_modules/'
+  assert_contains_line "$target/.claude/agents/custom.md" 'custom agent'
+  assert_marker_once "$target/AGENTS.md" '<!-- code-health:start -->'
+  assert_marker_once "$target/CLAUDE.md" '<!-- code-health:start -->'
+  assert_marker_once "$target/.gitignore" '# code-health:start'
+  assert_equals "$(permission_bits "$target/AGENTS.md")" "$agents_permissions"
+  assert_equals "$(permission_bits "$target/CLAUDE.md")" "$claude_permissions"
+  assert_equals "$(permission_bits "$target/.gitignore")" "$gitignore_permissions"
+
+  git -C "$target" check-ignore -q .code-health/runs/example || \
+    fail '.code-health/runs is not ignored'
+  if git -C "$target" check-ignore -q .code-health/framework/README.md; then
+    fail '.code-health/framework is ignored'
+  fi
+
+  mkdir -p "$target/nested/path"
+  (
+    cd "$target/nested/path"
+    ../../.code-health/framework/scripts/code-health/collect-baseline.sh \
+      .code-health/runs/test-baseline
+  )
+
+  assert_file "$target/.code-health/runs/test-baseline/repository.txt"
+  assert_contains_line \
+    "$target/.code-health/runs/test-baseline/repository.txt" \
+    "repository_root=$target"
+  assert_contains_line \
+    "$target/.code-health/runs/test-baseline/README.md" \
+    '- Collector: `.code-health/framework/scripts/code-health/collect-baseline.sh`'
+
+  "$installer" "$target"
+
+  assert_file "$target/.code-health/runs/test-baseline/repository.txt"
+  assert_marker_once "$target/AGENTS.md" '<!-- code-health:start -->'
+  assert_marker_once "$target/CLAUDE.md" '<!-- code-health:start -->'
+  assert_marker_once "$target/.gitignore" '# code-health:start'
+}
+
+test_upgrades_unmodified_installer_managed_files() {
+  local target="$test_root/upgrade-repository"
+  local release="$test_root/new-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  "$installer" "$target" >/dev/null
+  assert_equals "$(permission_bits "$target/AGENTS.md")" 'rw-r--r--'
+  assert_equals "$(permission_bits "$target/CLAUDE.md")" 'rw-r--r--'
+  assert_equals "$(permission_bits "$target/.gitignore")" 'rw-r--r--'
+
+  mkdir -p "$release/plugins"
+  cp "$project_root/README.md" "$release/README.md"
+  cp "$project_root/install.sh" "$release/install.sh"
+  cp -R "$project_root/plugins/code-health" "$release/plugins/code-health"
+  printf '\nUpgrade fixture.\n' >> \
+    "$release/plugins/code-health/agents/security.md"
+
+  "$release/install.sh" "$target" >/dev/null
+
+  cmp -s \
+    "$release/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md" || \
+    fail 'installer did not upgrade an unmodified managed Claude file'
+  cmp -s \
+    "$release/plugins/code-health/agents/security.md" \
+    "$target/.code-health/framework/.claude/agents/security.md" || \
+    fail 'canonical framework did not receive the upgraded Claude file'
+}
+
+test_rejects_conflicting_claude_files_before_writing() {
+  local target="$test_root/conflicting-repository"
+  local output="$test_root/conflict-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude/agents"
+  printf 'repository-owned security agent\n' > "$target/.claude/agents/security.md"
+
+  if "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer accepted a conflicting Claude agent file'
+  fi
+
+  assert_contains_line "$target/.claude/agents/security.md" \
+    'repository-owned security agent'
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer wrote framework files before reporting a conflict'
+  [[ ! -e $target/AGENTS.md ]] || \
+    fail 'installer wrote AGENTS.md before reporting a conflict'
+  grep -Fq 'Refusing to overwrite' "$output" || \
+    fail 'installer did not explain the Claude file conflict'
+}
+
+test_rejects_symlinked_integration_directories() {
+  local target="$test_root/symlinked-repository"
+  local external_agents="$test_root/external-agents"
+  local output="$test_root/symlink-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude" "$external_agents"
+  ln -s "$external_agents" "$target/.claude/agents"
+
+  if "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer accepted a symlinked Claude agents directory'
+  fi
+
+  [[ ! -e $external_agents/security.md ]] || \
+    fail 'installer followed a Claude directory symlink outside the repository'
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer wrote framework files before reporting a symlink'
+  grep -Fq 'symbolic link' "$output" || \
+    fail 'installer did not explain the unsafe symbolic link'
+}
+
+test_rejects_reversed_managed_markers_without_writing() {
+  local target="$test_root/reversed-markers-repository"
+  local expected="$test_root/reversed-markers-expected.txt"
+  local output="$test_root/reversed-markers-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  printf '%s\n' \
+    'before' \
+    '<!-- code-health:end -->' \
+    'repository-owned middle' \
+    '<!-- code-health:start -->' \
+    'repository-owned after' > "$target/AGENTS.md"
+  cp "$target/AGENTS.md" "$expected"
+
+  if "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer accepted reversed managed markers'
+  fi
+
+  cmp -s "$expected" "$target/AGENTS.md" || \
+    fail 'installer changed AGENTS.md with malformed markers'
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer wrote framework files before rejecting malformed markers'
+  grep -Fq 'malformed code-health managed block' "$output" || \
+    fail 'installer did not explain the malformed managed block'
+}
+
+test_rejects_non_repository_target() {
+  local target="$test_root/not-a-repository"
+  local output="$test_root/not-a-repository-output.txt"
+  mkdir -p "$target"
+
+  if "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer accepted a directory that is not a Git repository'
+  fi
+
+  grep -Fq 'not a Git repository' "$output" || \
+    fail 'installer did not explain the invalid target'
+  [[ ! -e $target/.code-health ]] || \
+    fail 'installer modified a directory that is not a Git repository'
+}
+
+test_installs_without_overwriting_and_is_repeatable
+test_upgrades_unmodified_installer_managed_files
+test_rejects_conflicting_claude_files_before_writing
+test_rejects_symlinked_integration_directories
+test_rejects_reversed_managed_markers_without_writing
+test_rejects_non_repository_target
+
+printf 'PASS: installer behavior\n'

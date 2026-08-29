@@ -1,0 +1,7 @@
+interface:
+  display_name: "Code Health"
+  short_description: "Evidence-backed repository risk audits"
+  brand_color: "#00A86B"
+  default_prompt: "Use $code-health to audit this repository and prioritize evidence-backed findings."
+policy:
+  allow_implicit_invocation: true

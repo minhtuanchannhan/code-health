@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "code-health",
+  "displayName": "Code Health",
+  "version": "0.1.0",
+  "description": "Evidence-backed repository audits with risk-ranked findings and explicit verification guidance.",
+  "author": {
+    "name": "minhtuanchannhan",
+    "url": "https://github.com/minhtuanchannhan"
+  },
+  "homepage": "https://github.com/minhtuanchannhan/code-health#readme",
+  "repository": "https://github.com/minhtuanchannhan/code-health",
+  "license": "MIT",
+  "keywords": ["code-health", "audit", "security", "reliability", "quality"],
+  "skills": "./skills/"
+}

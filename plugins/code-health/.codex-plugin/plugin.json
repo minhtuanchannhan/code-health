@@ -1,0 +1,33 @@
+{
+  "name": "code-health",
+  "version": "0.1.0",
+  "description": "Evidence-backed repository audits with risk-ranked findings and explicit verification guidance.",
+  "author": {
+    "name": "minhtuanchannhan",
+    "url": "https://github.com/minhtuanchannhan"
+  },
+  "homepage": "https://github.com/minhtuanchannhan/code-health#readme",
+  "repository": "https://github.com/minhtuanchannhan/code-health",
+  "license": "MIT",
+  "keywords": ["code-health", "audit", "security", "reliability", "quality"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Code Health",
+    "shortDescription": "Evidence-backed code-health audits for repositories.",
+    "longDescription": "Audit changed code, a component, or an entire repository using concrete evidence, risk-based prioritization, and verification guidance. Reviews cover security, reliability, architecture, maintainability, performance, scalability, testing, and developer experience without modifying production code.",
+    "developerName": "minhtuanchannhan",
+    "category": "Developer Tools",
+    "capabilities": ["Repository Analysis", "Read-only Audits", "Risk Prioritization"],
+    "websiteURL": "https://github.com/minhtuanchannhan/code-health",
+    "privacyPolicyURL": "https://github.com/minhtuanchannhan/code-health/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/minhtuanchannhan/code-health/blob/main/TERMS.md",
+    "defaultPrompt": [
+      "Audit this repository and report evidence-backed code-health findings.",
+      "Review the current changes for security and reliability risks.",
+      "Audit this component and prioritize the highest-risk improvements."
+    ],
+    "brandColor": "#00A86B",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  }
+}

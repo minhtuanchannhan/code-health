@@ -1,0 +1,17 @@
+{
+  "name": "code-health",
+  "owner": {
+    "name": "minhtuanchannhan"
+  },
+  "description": "Evidence-backed repository code-health audits for Claude Code.",
+  "plugins": [
+    {
+      "name": "code-health",
+      "source": "./plugins/code-health",
+      "description": "Evidence-backed repository audits across security, reliability, architecture, maintainability, performance, scalability, testing, and developer experience.",
+      "version": "0.1.0",
+      "category": "Development",
+      "tags": ["code-review", "security", "reliability", "quality"]
+    }
+  ]
+}
