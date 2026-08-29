@@ -32,7 +32,13 @@ assert_equals() {
 }
 
 permission_bits() {
-  LC_ALL=C ls -ld "$1" | cut -c2-10
+  local mode
+
+  if mode=$(stat -f '%Lp' "$1" 2>/dev/null); then
+    printf '%s\n' "$mode"
+  else
+    stat -c '%a' "$1"
+  fi
 }
 
 create_repository() {
@@ -114,7 +120,7 @@ test_installs_without_overwriting_and_is_repeatable() {
     "repository_root=$target"
   assert_contains_line \
     "$target/.code-health/runs/test-baseline/README.md" \
-    '- Collector: `.code-health/framework/scripts/code-health/collect-baseline.sh`'
+    "- Collector: \`.code-health/framework/scripts/code-health/collect-baseline.sh\`"
 
   "$installer" "$target"
 
@@ -131,9 +137,9 @@ test_upgrades_unmodified_installer_managed_files() {
   target=$(cd "$target" && pwd -P)
 
   "$installer" "$target" >/dev/null
-  assert_equals "$(permission_bits "$target/AGENTS.md")" 'rw-r--r--'
-  assert_equals "$(permission_bits "$target/CLAUDE.md")" 'rw-r--r--'
-  assert_equals "$(permission_bits "$target/.gitignore")" 'rw-r--r--'
+  assert_equals "$(permission_bits "$target/AGENTS.md")" '644'
+  assert_equals "$(permission_bits "$target/CLAUDE.md")" '644'
+  assert_equals "$(permission_bits "$target/.gitignore")" '644'
 
   mkdir -p "$release/plugins"
   cp "$project_root/README.md" "$release/README.md"

@@ -53,9 +53,9 @@ fi
 
 {
   printf '# Code-health baseline\n\n'
-  printf -- '- Generated: `%s`\n' "$generated_at"
-  printf -- '- Repository root: `%s`\n' "$repo_root"
-  printf -- '- Collector: `%s`\n\n' "$collector_path"
+  printf -- "- Generated: \`%s\`\n" "$generated_at"
+  printf -- "- Repository root: \`%s\`\n" "$repo_root"
+  printf -- "- Collector: \`%s\`\n\n" "$collector_path"
   printf 'This inventory is read-only evidence. It does not by itself establish a finding.\n'
 } > "$output_dir/README.md"
 
@@ -139,10 +139,10 @@ record_version() {
     printf -- '- Python: run configured tests, lint, type checks, and dependency audit in the project environment.\n'
   fi
   if grep -Eq '(^|/)go\\.mod$' "$output_dir/manifests.txt"; then
-    printf -- '- Go: `go test ./...` and `go vet ./...`.\n'
+    printf -- "- Go: \`go test ./...\` and \`go vet ./...\`.\n"
   fi
   if grep -Eq '(^|/)Cargo\\.toml$' "$output_dir/manifests.txt"; then
-    printf -- '- Rust: `cargo test` and the repository-configured format and Clippy checks.\n'
+    printf -- "- Rust: \`cargo test\` and the repository-configured format and Clippy checks.\n"
   fi
   if grep -Eq '(^|/)(pom\\.xml|build\\.gradle|build\\.gradle\\.kts)$' "$output_dir/manifests.txt"; then
     printf -- '- JVM: use the checked-in Maven or Gradle wrapper and configured verification tasks.\n'

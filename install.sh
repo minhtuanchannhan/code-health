@@ -156,7 +156,7 @@ write_agents_block() {
     '<!-- code-health:start -->' \
     '## Code-health framework' \
     '' \
-    'For code-health audits and remediation, first read `.code-health/framework/AGENTS.md` and the documents it references. Treat the target repository instructions and business rules as higher priority when they conflict with generic framework guidance.' \
+    "For code-health audits and remediation, first read \`.code-health/framework/AGENTS.md\` and the documents it references. Treat the target repository instructions and business rules as higher priority when they conflict with generic framework guidance." \
     '<!-- code-health:end -->'
 }
 
@@ -165,7 +165,7 @@ write_claude_block() {
     '<!-- code-health:start -->' \
     '## Code-health framework' \
     '' \
-    'Use `/code-health` for evidence-backed audits. Its project skill and specialist agents are installed under `.claude/`; the canonical framework guidance is under `.code-health/framework/`.' \
+    "Use \`/code-health\` for evidence-backed audits. Its project skill and specialist agents are installed under \`.claude/\`; the canonical framework guidance is under \`.code-health/framework/\`." \
     '<!-- code-health:end -->'
 }
 
