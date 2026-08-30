@@ -109,7 +109,7 @@ For a release:
 
 1. Update the semantic version in both plugin manifests and the Claude marketplace entry.
 2. Update `plugins/code-health/submission/release-notes.md` and rerun all checks.
-3. Commit, push `main`, and create the matching Git tag or GitHub release.
+3. Commit, push `master`, and create the matching Git tag or GitHub release.
 4. Test a clean install from `minhtuanchannhan/code-health`, not from the working tree.
 5. For Claude Code, the public GitHub marketplace is then installable with the commands above.
 6. For Codex and ChatGPT, a workspace admin can import the GitHub marketplace. Publication to OpenAI's universal public Plugin Directory is a separate OpenAI product review or publishing action and is not performed by a Git push.

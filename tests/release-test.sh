@@ -67,12 +67,15 @@ codex_manifest = load_json(plugin / ".codex-plugin" / "plugin.json")
 claude_marketplace = load_json(root / ".claude-plugin" / "marketplace.json")
 codex_marketplace = load_json(root / ".agents" / "plugins" / "marketplace.json")
 test_cases = load_json(plugin / "submission" / "openai-test-cases.json")
+release_notes = (plugin / "submission" / "release-notes.md").read_text(
+    encoding="utf-8"
+)
 
-expected_version = "0.1.0"
+expected_version = codex_manifest["version"]
+assert re.fullmatch(r"\d+\.\d+\.\d+", expected_version)
 for manifest in (claude_manifest, codex_manifest):
     assert manifest["name"] == "code-health"
     assert manifest["version"] == expected_version
-    assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
     assert manifest["description"].strip()
     assert manifest["author"]["name"] == "minhtuanchannhan"
     assert manifest["repository"] == "https://github.com/minhtuanchannhan/code-health"
@@ -106,6 +109,11 @@ assert all(len(prompt) <= 128 for prompt in interface["defaultPrompt"])
 
 for key in ("websiteURL", "privacyPolicyURL", "termsOfServiceURL"):
     assert interface[key].startswith("https://")
+expected_document_root = (
+    "https://github.com/minhtuanchannhan/code-health/blob/master"
+)
+assert interface["privacyPolicyURL"] == f"{expected_document_root}/PRIVACY.md"
+assert interface["termsOfServiceURL"] == f"{expected_document_root}/TERMS.md"
 for key in ("composerIcon", "logo"):
     asset = plugin / interface[key].removeprefix("./")
     assert asset.is_file(), f"missing manifest asset: {asset}"
@@ -117,6 +125,9 @@ claude_entry = claude_marketplace["plugins"][0]
 assert claude_entry["name"] == "code-health"
 assert claude_entry["source"] == "./plugins/code-health"
 assert claude_entry["version"] == expected_version
+release_version = re.search(r"^## (\d+\.\d+\.\d+)$", release_notes, re.MULTILINE)
+assert release_version, "release notes must start with a semantic version heading"
+assert release_version.group(1) == expected_version
 
 assert codex_marketplace["name"] == "code-health"
 assert codex_marketplace["interface"]["displayName"] == "Code Health"
@@ -165,22 +176,30 @@ mirrored_contracts = {
     root / "docs" / "code-health" / "README.md": [
         plugin / "docs" / "code-health" / "README.md",
         plugin / "skills" / "code-health" / "references" / "operating-model.md",
+        root / ".claude" / "skills" / "code-health" / "references" / "operating-model.md",
     ],
     root / "docs" / "code-health" / "scoring.md": [
         plugin / "docs" / "code-health" / "scoring.md",
         plugin / "skills" / "code-health" / "references" / "scoring.md",
+        root / ".claude" / "skills" / "code-health" / "references" / "scoring.md",
     ],
     root / "docs" / "code-health" / "finding-format.md": [
         plugin / "docs" / "code-health" / "finding-format.md",
         plugin / "skills" / "code-health" / "references" / "finding-format.md",
+        root / ".claude" / "skills" / "code-health" / "references" / "finding-format.md",
     ],
     root / "docs" / "code-health" / "tooling.md": [
         plugin / "docs" / "code-health" / "tooling.md",
         plugin / "skills" / "code-health" / "references" / "tooling.md",
+        root / ".claude" / "skills" / "code-health" / "references" / "tooling.md",
     ],
     root / "scripts" / "code-health" / "collect-baseline.sh": [
         plugin / "scripts" / "code-health" / "collect-baseline.sh",
         plugin / "skills" / "code-health" / "scripts" / "collect-baseline.sh",
+        root / ".claude" / "skills" / "code-health" / "scripts" / "collect-baseline.sh",
+    ],
+    root / ".claude" / "skills" / "code-health" / "agents" / "openai.yaml": [
+        plugin / "skills" / "code-health" / "agents" / "openai.yaml",
     ],
 }
 for source, mirrors in mirrored_contracts.items():
