@@ -50,6 +50,7 @@ import json
 import filecmp
 import pathlib
 import re
+import stat
 import struct
 import sys
 
@@ -60,6 +61,31 @@ plugin = root / "plugins" / "code-health"
 def load_json(path):
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def assert_tree_matches(source, mirror):
+    source_files = {
+        path.relative_to(source) for path in source.rglob("*") if path.is_file()
+    }
+    mirror_files = {
+        path.relative_to(mirror) for path in mirror.rglob("*") if path.is_file()
+    }
+    assert source_files == mirror_files, (
+        f"tree mismatch: {source} != {mirror}; "
+        f"source-only={sorted(map(str, source_files - mirror_files))}; "
+        f"mirror-only={sorted(map(str, mirror_files - source_files))}"
+    )
+    for relative_path in sorted(source_files):
+        source_file = source / relative_path
+        mirror_file = mirror / relative_path
+        assert filecmp.cmp(source_file, mirror_file, shallow=False), (
+            f"stale mirror: {mirror_file}"
+        )
+        source_executable = bool(source_file.stat().st_mode & stat.S_IXUSR)
+        mirror_executable = bool(mirror_file.stat().st_mode & stat.S_IXUSR)
+        assert source_executable == mirror_executable, (
+            f"executable-mode mismatch: {source_file} != {mirror_file}"
+        )
 
 
 claude_manifest = load_json(plugin / ".claude-plugin" / "plugin.json")
@@ -162,13 +188,11 @@ assert width >= 512 and height >= 512
 assert bit_depth == 8
 assert color_type in (4, 6), "logo must preserve transparency"
 
-assert filecmp.cmp(
-    root / ".claude" / "skills" / "code-health" / "SKILL.md",
-    plugin / "skills" / "code-health" / "SKILL.md",
-    shallow=False,
+assert_tree_matches(
+    root / ".claude" / "skills" / "code-health",
+    plugin / "skills" / "code-health",
 )
-for agent in (root / ".claude" / "agents").glob("*.md"):
-    assert filecmp.cmp(agent, plugin / "agents" / agent.name, shallow=False)
+assert_tree_matches(root / ".claude" / "agents", plugin / "agents")
 
 mirrored_contracts = {
     root / "AGENTS.md": [plugin / "framework" / "AGENTS.md"],
@@ -176,30 +200,22 @@ mirrored_contracts = {
     root / "docs" / "code-health" / "README.md": [
         plugin / "docs" / "code-health" / "README.md",
         plugin / "skills" / "code-health" / "references" / "operating-model.md",
-        root / ".claude" / "skills" / "code-health" / "references" / "operating-model.md",
     ],
     root / "docs" / "code-health" / "scoring.md": [
         plugin / "docs" / "code-health" / "scoring.md",
         plugin / "skills" / "code-health" / "references" / "scoring.md",
-        root / ".claude" / "skills" / "code-health" / "references" / "scoring.md",
     ],
     root / "docs" / "code-health" / "finding-format.md": [
         plugin / "docs" / "code-health" / "finding-format.md",
         plugin / "skills" / "code-health" / "references" / "finding-format.md",
-        root / ".claude" / "skills" / "code-health" / "references" / "finding-format.md",
     ],
     root / "docs" / "code-health" / "tooling.md": [
         plugin / "docs" / "code-health" / "tooling.md",
         plugin / "skills" / "code-health" / "references" / "tooling.md",
-        root / ".claude" / "skills" / "code-health" / "references" / "tooling.md",
     ],
     root / "scripts" / "code-health" / "collect-baseline.sh": [
         plugin / "scripts" / "code-health" / "collect-baseline.sh",
         plugin / "skills" / "code-health" / "scripts" / "collect-baseline.sh",
-        root / ".claude" / "skills" / "code-health" / "scripts" / "collect-baseline.sh",
-    ],
-    root / ".claude" / "skills" / "code-health" / "agents" / "openai.yaml": [
-        plugin / "skills" / "code-health" / "agents" / "openai.yaml",
     ],
 }
 for source, mirrors in mirrored_contracts.items():
