@@ -207,6 +207,105 @@ test_preserves_modified_obsolete_installer_managed_files() {
     fail 'installer did not explain why it preserved a modified obsolete file'
 }
 
+test_preserves_identical_repository_owned_files_when_they_become_obsolete() {
+  local target="$test_root/identical-repository-owned-file-repository"
+  local old_release="$test_root/identical-repository-owned-old-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude/agents"
+  touch "$target/.claude/agents/obsolete.md"
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  "$installer" "$target" >/dev/null
+
+  assert_file "$target/.claude/agents/obsolete.md"
+}
+
+test_preserves_ambiguous_obsolete_files_from_legacy_installations() {
+  local target="$test_root/legacy-obsolete-file-repository"
+  local old_release="$test_root/legacy-obsolete-old-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  rm -f -- \
+    "$target/.code-health/framework/.code-health-managed-claude-files"
+  "$installer" "$target" >/dev/null
+
+  assert_file "$target/.claude/agents/obsolete.md"
+}
+
+test_restores_previous_framework_after_integration_failure() {
+  local target="$test_root/retryable-upgrade-repository"
+  local old_release="$test_root/retryable-old-release"
+  local output="$test_root/retryable-upgrade-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  printf '\nOld release fixture.\n' >> \
+    "$old_release/plugins/code-health/agents/security.md"
+  "$old_release/install.sh" "$target" >/dev/null
+
+  if bash -c '
+    cp() {
+      local destination=${!#}
+      if [[ $destination == */.claude/agents/reliability.md ]]; then
+        return 73
+      fi
+      command cp "$@"
+    }
+
+    source "$1" "$2"
+  ' _ "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer ignored an injected integration-copy failure'
+  fi
+
+  cmp -s \
+    "$old_release/plugins/code-health/agents/security.md" \
+    "$target/.code-health/framework/.claude/agents/security.md" || \
+    fail 'installer did not restore the previous framework after failure'
+
+  "$installer" "$target" >/dev/null
+  cmp -s \
+    "$project_root/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md" || \
+    fail 'installer upgrade was not retryable after integration failure'
+}
+
+test_rolls_back_new_framework_after_integration_failure() {
+  local target="$test_root/rolled-back-new-install-repository"
+  local output="$test_root/rolled-back-new-install-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  if bash -c '
+    cp() {
+      local destination=${!#}
+      if [[ $destination == */.claude/agents/reliability.md ]]; then
+        return 73
+      fi
+      command cp "$@"
+    }
+
+    source "$1" "$2"
+  ' _ "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer ignored an injected new-install copy failure'
+  fi
+
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer retained a new framework after integration failure'
+  if find "$target/.claude" -type f -print -quit 2>/dev/null | grep -q .; then
+    fail 'installer retained managed Claude files after new-install failure'
+  fi
+}
+
 test_rejects_conflicting_claude_files_before_writing() {
   local target="$test_root/conflicting-repository"
   local output="$test_root/conflict-output.txt"
@@ -315,6 +414,10 @@ test_installs_without_overwriting_and_is_repeatable
 test_upgrades_unmodified_installer_managed_files
 test_removes_obsolete_unmodified_installer_managed_files
 test_preserves_modified_obsolete_installer_managed_files
+test_preserves_identical_repository_owned_files_when_they_become_obsolete
+test_preserves_ambiguous_obsolete_files_from_legacy_installations
+test_restores_previous_framework_after_integration_failure
+test_rolls_back_new_framework_after_integration_failure
 test_rejects_conflicting_claude_files_before_writing
 test_rejects_symlinked_integration_directories
 test_rejects_non_directory_claude_ancestors_before_writing

@@ -98,10 +98,23 @@ done
 framework_parent="$target_root/.code-health"
 framework_dir="$framework_parent/framework"
 managed_marker='.code-health-managed'
+managed_claude_manifest='.code-health-managed-claude-files'
 
 if [[ -e $framework_dir && ! -f $framework_dir/$managed_marker ]]; then
   die "existing framework directory is not installer-managed: $framework_dir"
 fi
+if [[ -e $framework_dir/$managed_claude_manifest && \
+  ( ! -f $framework_dir/$managed_claude_manifest || \
+    -L $framework_dir/$managed_claude_manifest ) ]]; then
+  die "invalid managed Claude file inventory: $framework_dir/$managed_claude_manifest"
+fi
+
+manifest_contains() {
+  local manifest=$1
+  local relative_path=$2
+
+  [[ -f $manifest ]] && grep -Fqx -- "$relative_path" "$manifest"
+}
 
 validate_managed_block() {
   local file=$1
@@ -177,6 +190,8 @@ if [[ -f $framework_dir/$managed_marker ]]; then
   while IFS= read -r previous_file; do
     relative_path=${previous_file#"$framework_dir/.claude/"}
     [[ ! -e $plugin_root/$relative_path ]] || continue
+    manifest_contains \
+      "$framework_dir/$managed_claude_manifest" "$relative_path" || continue
     target_file="$target_root/.claude/$relative_path"
     reject_target_symlinks ".claude/$relative_path"
     reject_non_directory_ancestors ".claude/$relative_path"
@@ -279,7 +294,52 @@ cleanup_staging() {
     rm -rf -- "$staging_dir"
   fi
 }
-trap cleanup_staging EXIT
+
+cleanup_failed_install() {
+  local relative_path
+  local source_file
+  local target_file
+
+  [[ ${framework_swapped:-0} -eq 1 ]] || return 0
+  [[ -f $framework_dir/$managed_marker ]] || {
+    printf 'Error: cannot roll back unmarked framework: %s\n' \
+      "$framework_dir" >&2
+    return 0
+  }
+
+  if [[ -z ${backup_dir:-} ]]; then
+    while IFS= read -r relative_path; do
+      source_file="$plugin_root/$relative_path"
+      target_file="$target_root/.claude/$relative_path"
+      if [[ -f $source_file && -f $target_file ]] && \
+        cmp -s "$source_file" "$target_file"; then
+        rm -f -- "$target_file"
+      fi
+    done < "$framework_dir/$managed_claude_manifest"
+  fi
+
+  if ! rm -rf -- "$framework_dir"; then
+    printf 'Error: could not remove failed framework payload: %s\n' \
+      "$framework_dir" >&2
+    return 0
+  fi
+
+  if [[ -n ${backup_dir:-} && -d $backup_dir ]]; then
+    if ! mv "$backup_dir" "$framework_dir"; then
+      printf 'Error: previous framework remains at %s\n' "$backup_dir" >&2
+    fi
+  fi
+}
+
+cleanup_install() {
+  local exit_status=$?
+
+  if [[ $exit_status -ne 0 ]]; then
+    cleanup_failed_install
+  fi
+  cleanup_staging
+}
+trap cleanup_install EXIT
 
 cp "$plugin_root/framework/AGENTS.md" "$staging_dir/AGENTS.md"
 cp "$plugin_root/framework/CLAUDE.md" "$staging_dir/CLAUDE.md"
@@ -297,10 +357,22 @@ mkdir -p "$staging_dir/.claude"
 cp -R "$plugin_root/agents" "$staging_dir/.claude/agents"
 cp -R "$plugin_root/skills" "$staging_dir/.claude/skills"
 printf 'managed-by=code-health-installer\n' > "$staging_dir/$managed_marker"
+: > "$staging_dir/$managed_claude_manifest"
+while IFS= read -r claude_file; do
+  relative_path=${claude_file#"$plugin_root/"}
+  target_file="$target_root/.claude/$relative_path"
+  if manifest_contains \
+    "$framework_dir/$managed_claude_manifest" "$relative_path" || \
+    [[ ! -e $target_file ]]; then
+    printf '%s\n' "$relative_path" >> \
+      "$staging_dir/$managed_claude_manifest"
+  fi
+done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
 chmod +x "$staging_dir/install.sh"
 chmod +x "$staging_dir/scripts/code-health/collect-baseline.sh"
 
 backup_dir=''
+framework_swapped=0
 if [[ -d $framework_dir ]]; then
   backup_dir=$(mktemp -d "$framework_parent/.framework-backup.XXXXXX")
   rmdir "$backup_dir"
@@ -314,6 +386,7 @@ if ! mv "$staging_dir" "$framework_dir"; then
   die 'could not install the staged framework payload'
 fi
 staging_dir=''
+framework_swapped=1
 
 while IFS= read -r claude_file; do
   relative_path=${claude_file#"$plugin_root/"}
@@ -326,6 +399,8 @@ if [[ -n $backup_dir && -d $backup_dir ]]; then
   while IFS= read -r previous_file; do
     relative_path=${previous_file#"$backup_dir/.claude/"}
     [[ ! -e $plugin_root/$relative_path ]] || continue
+    manifest_contains \
+      "$backup_dir/$managed_claude_manifest" "$relative_path" || continue
     target_file="$target_root/.claude/$relative_path"
     [[ -f $target_file ]] || continue
     if cmp -s "$previous_file" "$target_file"; then
@@ -352,6 +427,7 @@ if [[ -n $backup_dir && -d $backup_dir ]]; then
     die "refusing to remove unmarked framework backup: $backup_dir"
   rm -rf -- "$backup_dir"
 fi
+framework_swapped=0
 
 printf 'Code-health framework installed in %s\n' "$framework_dir"
 printf 'Baseline collector: %s\n' \
