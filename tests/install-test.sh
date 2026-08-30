@@ -224,6 +224,38 @@ test_preserves_identical_repository_owned_files_when_they_become_obsolete() {
   assert_file "$target/.claude/agents/obsolete.md"
 }
 
+test_preserves_identical_repository_owned_files_during_content_upgrades() {
+  local target="$test_root/identical-repository-owned-upgrade-repository"
+  local release="$test_root/identical-repository-owned-new-release"
+  local expected="$test_root/identical-repository-owned-security.md"
+  local output="$test_root/identical-repository-owned-upgrade-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude/agents"
+  cp "$project_root/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md"
+  cp "$target/.claude/agents/security.md" "$expected"
+
+  "$installer" "$target" >/dev/null
+  if grep -Fqx 'agents/security.md' \
+    "$target/.code-health/framework/.code-health-managed-claude-files"; then
+    fail 'installer claimed ownership of an existing identical Claude file'
+  fi
+
+  copy_installer_release "$release"
+  printf '\nChanged release fixture.\n' >> \
+    "$release/plugins/code-health/agents/security.md"
+
+  if "$release/install.sh" "$target" > "$output" 2>&1; then
+    fail 'installer overwrote an identical repository-owned Claude file'
+  fi
+
+  cmp -s "$expected" "$target/.claude/agents/security.md" || \
+    fail 'installer changed an identical repository-owned Claude file'
+  grep -Fq 'Refusing to overwrite repository-owned Claude file' "$output" || \
+    fail 'installer did not explain the repository-owned upgrade conflict'
+}
+
 test_preserves_ambiguous_obsolete_files_from_legacy_installations() {
   local target="$test_root/legacy-obsolete-file-repository"
   local old_release="$test_root/legacy-obsolete-old-release"
@@ -255,8 +287,10 @@ test_restores_previous_framework_after_integration_failure() {
 
   if bash -c '
     cp() {
+      local source=$1
       local destination=${!#}
-      if [[ $destination == */.claude/agents/reliability.md ]]; then
+      if [[ $source == */plugins/code-health/agents/reliability.md ]]; then
+        printf 'partial copy\n' > "$destination"
         return 73
       fi
       command cp "$@"
@@ -271,6 +305,10 @@ test_restores_previous_framework_after_integration_failure() {
     "$old_release/plugins/code-health/agents/security.md" \
     "$target/.code-health/framework/.claude/agents/security.md" || \
     fail 'installer did not restore the previous framework after failure'
+  if find "$target/.claude" -name '.code-health-copy.*' -print -quit | \
+    grep -q .; then
+    fail 'installer retained a temporary integration file after failure'
+  fi
 
   "$installer" "$target" >/dev/null
   cmp -s \
@@ -287,8 +325,10 @@ test_rolls_back_new_framework_after_integration_failure() {
 
   if bash -c '
     cp() {
+      local source=$1
       local destination=${!#}
-      if [[ $destination == */.claude/agents/reliability.md ]]; then
+      if [[ $source == */plugins/code-health/agents/reliability.md ]]; then
+        printf 'partial copy\n' > "$destination"
         return 73
       fi
       command cp "$@"
@@ -415,6 +455,7 @@ test_upgrades_unmodified_installer_managed_files
 test_removes_obsolete_unmodified_installer_managed_files
 test_preserves_modified_obsolete_installer_managed_files
 test_preserves_identical_repository_owned_files_when_they_become_obsolete
+test_preserves_identical_repository_owned_files_during_content_upgrades
 test_preserves_ambiguous_obsolete_files_from_legacy_installations
 test_restores_previous_framework_after_integration_failure
 test_rolls_back_new_framework_after_integration_failure

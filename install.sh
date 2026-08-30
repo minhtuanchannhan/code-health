@@ -174,8 +174,10 @@ preflight_claude_file() {
   if cmp -s "$source_file" "$target_file"; then
     return 0
   fi
-  if [[ -f $framework_dir/$managed_marker && -f $previous_file ]] && \
-    cmp -s "$previous_file" "$target_file"; then
+  if [[ -f $framework_dir/$managed_marker ]] && \
+    manifest_contains \
+      "$framework_dir/$managed_claude_manifest" "$relative_path" && \
+    [[ -f $previous_file ]] && cmp -s "$previous_file" "$target_file"; then
     return 0
   fi
 
@@ -388,11 +390,31 @@ fi
 staging_dir=''
 framework_swapped=1
 
+install_claude_file() {
+  local source_file=$1
+  local relative_path=${source_file#"$plugin_root/"}
+  local target_file="$target_root/.claude/$relative_path"
+  local target_parent
+  local temporary_file
+
+  manifest_contains \
+    "$framework_dir/$managed_claude_manifest" "$relative_path" || return 0
+
+  target_parent=$(dirname "$target_file")
+  mkdir -p "$target_parent"
+  temporary_file=$(mktemp "$target_parent/.code-health-copy.XXXXXX")
+  if ! cp -p "$source_file" "$temporary_file"; then
+    rm -f -- "$temporary_file"
+    return 1
+  fi
+  if ! mv "$temporary_file" "$target_file"; then
+    rm -f -- "$temporary_file"
+    return 1
+  fi
+}
+
 while IFS= read -r claude_file; do
-  relative_path=${claude_file#"$plugin_root/"}
-  target_file="$target_root/.claude/$relative_path"
-  mkdir -p "$(dirname "$target_file")"
-  cp "$claude_file" "$target_file"
+  install_claude_file "$claude_file"
 done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
 
 if [[ -n $backup_dir && -d $backup_dir ]]; then
