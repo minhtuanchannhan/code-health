@@ -116,6 +116,16 @@ manifest_contains() {
   [[ -f $manifest ]] && grep -Fqx -- "$relative_path" "$manifest"
 }
 
+legacy_managed_file_matches() {
+  local relative_path=$1
+  local manifest="$framework_dir/$managed_claude_manifest"
+  local previous_file="$framework_dir/.claude/$relative_path"
+  local target_file="$target_root/.claude/$relative_path"
+
+  [[ ! -e $manifest && -f $previous_file && -f $target_file ]] && \
+    cmp -s "$previous_file" "$target_file"
+}
+
 validate_managed_block() {
   local file=$1
   local start_marker=$2
@@ -174,10 +184,11 @@ preflight_claude_file() {
   if cmp -s "$source_file" "$target_file"; then
     return 0
   fi
-  if [[ -f $framework_dir/$managed_marker ]] && \
-    manifest_contains \
-      "$framework_dir/$managed_claude_manifest" "$relative_path" && \
-    [[ -f $previous_file ]] && cmp -s "$previous_file" "$target_file"; then
+  if [[ -f $framework_dir/$managed_marker && -f $previous_file ]] && \
+    cmp -s "$previous_file" "$target_file" && \
+    { manifest_contains \
+        "$framework_dir/$managed_claude_manifest" "$relative_path" || \
+      legacy_managed_file_matches "$relative_path"; }; then
     return 0
   fi
 
@@ -365,6 +376,7 @@ while IFS= read -r claude_file; do
   target_file="$target_root/.claude/$relative_path"
   if manifest_contains \
     "$framework_dir/$managed_claude_manifest" "$relative_path" || \
+    legacy_managed_file_matches "$relative_path" || \
     [[ ! -e $target_file ]]; then
     printf '%s\n' "$relative_path" >> \
       "$staging_dir/$managed_claude_manifest"

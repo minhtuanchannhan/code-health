@@ -273,10 +273,35 @@ test_preserves_ambiguous_obsolete_files_from_legacy_installations() {
   assert_file "$target/.claude/agents/obsolete.md"
 }
 
+test_upgrades_unmodified_files_from_legacy_installations() {
+  local target="$test_root/legacy-changed-content-upgrade-repository"
+  local release="$test_root/legacy-changed-content-new-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  "$installer" "$target" >/dev/null
+  rm -f -- \
+    "$target/.code-health/framework/.code-health-managed-claude-files"
+  copy_installer_release "$release"
+  printf '\nChanged legacy upgrade fixture.\n' >> \
+    "$release/plugins/code-health/agents/security.md"
+
+  "$release/install.sh" "$target" >/dev/null
+
+  cmp -s \
+    "$release/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md" || \
+    fail 'installer did not upgrade an unmodified legacy Claude file'
+  assert_contains_line \
+    "$target/.code-health/framework/.code-health-managed-claude-files" \
+    'agents/security.md'
+}
+
 test_restores_previous_framework_after_integration_failure() {
   local target="$test_root/retryable-upgrade-repository"
   local old_release="$test_root/retryable-old-release"
   local output="$test_root/retryable-upgrade-output.txt"
+  local injection_marker="$test_root/retryable-upgrade-injection.txt"
   create_repository "$target"
   target=$(cd "$target" && pwd -P)
 
@@ -286,20 +311,26 @@ test_restores_previous_framework_after_integration_failure() {
   "$old_release/install.sh" "$target" >/dev/null
 
   if bash -c '
+    injection_marker=$3
     cp() {
       local source=$1
       local destination=${!#}
+      if [[ $source == -p ]]; then
+        source=$2
+      fi
       if [[ $source == */plugins/code-health/agents/reliability.md ]]; then
-        printf 'partial copy\n' > "$destination"
+        printf "partial copy\n" > "$destination"
+        printf "reached\n" > "$injection_marker"
         return 73
       fi
       command cp "$@"
     }
 
     source "$1" "$2"
-  ' _ "$installer" "$target" > "$output" 2>&1; then
+  ' _ "$installer" "$target" "$injection_marker" > "$output" 2>&1; then
     fail 'installer ignored an injected integration-copy failure'
   fi
+  assert_file "$injection_marker"
 
   cmp -s \
     "$old_release/plugins/code-health/agents/security.md" \
@@ -320,24 +351,31 @@ test_restores_previous_framework_after_integration_failure() {
 test_rolls_back_new_framework_after_integration_failure() {
   local target="$test_root/rolled-back-new-install-repository"
   local output="$test_root/rolled-back-new-install-output.txt"
+  local injection_marker="$test_root/rolled-back-new-install-injection.txt"
   create_repository "$target"
   target=$(cd "$target" && pwd -P)
 
   if bash -c '
+    injection_marker=$3
     cp() {
       local source=$1
       local destination=${!#}
+      if [[ $source == -p ]]; then
+        source=$2
+      fi
       if [[ $source == */plugins/code-health/agents/reliability.md ]]; then
-        printf 'partial copy\n' > "$destination"
+        printf "partial copy\n" > "$destination"
+        printf "reached\n" > "$injection_marker"
         return 73
       fi
       command cp "$@"
     }
 
     source "$1" "$2"
-  ' _ "$installer" "$target" > "$output" 2>&1; then
+  ' _ "$installer" "$target" "$injection_marker" > "$output" 2>&1; then
     fail 'installer ignored an injected new-install copy failure'
   fi
+  assert_file "$injection_marker"
 
   [[ ! -e $target/.code-health/framework ]] || \
     fail 'installer retained a new framework after integration failure'
@@ -457,6 +495,7 @@ test_preserves_modified_obsolete_installer_managed_files
 test_preserves_identical_repository_owned_files_when_they_become_obsolete
 test_preserves_identical_repository_owned_files_during_content_upgrades
 test_preserves_ambiguous_obsolete_files_from_legacy_installations
+test_upgrades_unmodified_files_from_legacy_installations
 test_restores_previous_framework_after_integration_failure
 test_rolls_back_new_framework_after_integration_failure
 test_rejects_conflicting_claude_files_before_writing
