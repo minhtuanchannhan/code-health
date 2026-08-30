@@ -46,6 +46,16 @@ create_repository() {
   git init -q "$1"
 }
 
+copy_installer_release() {
+  local destination=$1
+
+  mkdir -p "$destination/plugins"
+  cp "$project_root/README.md" "$destination/README.md"
+  cp "$project_root/install.sh" "$destination/install.sh"
+  cp -R "$project_root/plugins/code-health" \
+    "$destination/plugins/code-health"
+}
+
 test_installs_without_overwriting_and_is_repeatable() {
   local target="$test_root/target repository"
   local agents_permissions
@@ -141,10 +151,7 @@ test_upgrades_unmodified_installer_managed_files() {
   assert_equals "$(permission_bits "$target/CLAUDE.md")" '644'
   assert_equals "$(permission_bits "$target/.gitignore")" '644'
 
-  mkdir -p "$release/plugins"
-  cp "$project_root/README.md" "$release/README.md"
-  cp "$project_root/install.sh" "$release/install.sh"
-  cp -R "$project_root/plugins/code-health" "$release/plugins/code-health"
+  copy_installer_release "$release"
   printf '\nUpgrade fixture.\n' >> \
     "$release/plugins/code-health/agents/security.md"
 
@@ -158,6 +165,223 @@ test_upgrades_unmodified_installer_managed_files() {
     "$release/plugins/code-health/agents/security.md" \
     "$target/.code-health/framework/.claude/agents/security.md" || \
     fail 'canonical framework did not receive the upgraded Claude file'
+}
+
+test_removes_obsolete_unmodified_installer_managed_files() {
+  local target="$test_root/obsolete-managed-file-repository"
+  local old_release="$test_root/old-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  assert_file "$target/.claude/agents/obsolete.md"
+
+  "$installer" "$target" >/dev/null
+
+  [[ ! -e $target/.claude/agents/obsolete.md ]] || \
+    fail 'installer retained an obsolete unmodified managed Claude file'
+}
+
+test_preserves_modified_obsolete_installer_managed_files() {
+  local target="$test_root/modified-obsolete-managed-file-repository"
+  local old_release="$test_root/modified-old-release"
+  local output="$test_root/modified-obsolete-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  printf 'repository-owned replacement\n' > \
+    "$target/.claude/agents/obsolete.md"
+
+  "$installer" "$target" > "$output" 2>&1
+
+  assert_contains_line "$target/.claude/agents/obsolete.md" \
+    'repository-owned replacement'
+  grep -Fq 'Preserving modified obsolete Claude file' "$output" || \
+    fail 'installer did not explain why it preserved a modified obsolete file'
+}
+
+test_preserves_identical_repository_owned_files_when_they_become_obsolete() {
+  local target="$test_root/identical-repository-owned-file-repository"
+  local old_release="$test_root/identical-repository-owned-old-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude/agents"
+  touch "$target/.claude/agents/obsolete.md"
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  "$installer" "$target" >/dev/null
+
+  assert_file "$target/.claude/agents/obsolete.md"
+}
+
+test_preserves_identical_repository_owned_files_during_content_upgrades() {
+  local target="$test_root/identical-repository-owned-upgrade-repository"
+  local release="$test_root/identical-repository-owned-new-release"
+  local expected="$test_root/identical-repository-owned-security.md"
+  local output="$test_root/identical-repository-owned-upgrade-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude/agents"
+  cp "$project_root/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md"
+  cp "$target/.claude/agents/security.md" "$expected"
+
+  "$installer" "$target" >/dev/null
+  if grep -Fqx 'agents/security.md' \
+    "$target/.code-health/framework/.code-health-managed-claude-files"; then
+    fail 'installer claimed ownership of an existing identical Claude file'
+  fi
+
+  copy_installer_release "$release"
+  printf '\nChanged release fixture.\n' >> \
+    "$release/plugins/code-health/agents/security.md"
+
+  if "$release/install.sh" "$target" > "$output" 2>&1; then
+    fail 'installer overwrote an identical repository-owned Claude file'
+  fi
+
+  cmp -s "$expected" "$target/.claude/agents/security.md" || \
+    fail 'installer changed an identical repository-owned Claude file'
+  grep -Fq 'Refusing to overwrite repository-owned Claude file' "$output" || \
+    fail 'installer did not explain the repository-owned upgrade conflict'
+}
+
+test_preserves_ambiguous_obsolete_files_from_legacy_installations() {
+  local target="$test_root/legacy-obsolete-file-repository"
+  local old_release="$test_root/legacy-obsolete-old-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  rm -f -- \
+    "$target/.code-health/framework/.code-health-managed-claude-files"
+  "$installer" "$target" >/dev/null
+
+  assert_file "$target/.claude/agents/obsolete.md"
+}
+
+test_upgrades_unmodified_files_from_legacy_installations() {
+  local target="$test_root/legacy-changed-content-upgrade-repository"
+  local release="$test_root/legacy-changed-content-new-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  "$installer" "$target" >/dev/null
+  rm -f -- \
+    "$target/.code-health/framework/.code-health-managed-claude-files"
+  copy_installer_release "$release"
+  printf '\nChanged legacy upgrade fixture.\n' >> \
+    "$release/plugins/code-health/agents/security.md"
+
+  "$release/install.sh" "$target" >/dev/null
+
+  cmp -s \
+    "$release/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md" || \
+    fail 'installer did not upgrade an unmodified legacy Claude file'
+  assert_contains_line \
+    "$target/.code-health/framework/.code-health-managed-claude-files" \
+    'agents/security.md'
+}
+
+test_restores_previous_framework_after_integration_failure() {
+  local target="$test_root/retryable-upgrade-repository"
+  local old_release="$test_root/retryable-old-release"
+  local output="$test_root/retryable-upgrade-output.txt"
+  local injection_marker="$test_root/retryable-upgrade-injection.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  printf '\nOld release fixture.\n' >> \
+    "$old_release/plugins/code-health/agents/security.md"
+  "$old_release/install.sh" "$target" >/dev/null
+
+  if bash -c '
+    injection_marker=$3
+    cp() {
+      local source=$1
+      local destination=${!#}
+      if [[ $source == -p ]]; then
+        source=$2
+      fi
+      if [[ $source == */plugins/code-health/agents/reliability.md ]]; then
+        printf "partial copy\n" > "$destination"
+        printf "reached\n" > "$injection_marker"
+        return 73
+      fi
+      command cp "$@"
+    }
+
+    source "$1" "$2"
+  ' _ "$installer" "$target" "$injection_marker" > "$output" 2>&1; then
+    fail 'installer ignored an injected integration-copy failure'
+  fi
+  assert_file "$injection_marker"
+
+  cmp -s \
+    "$old_release/plugins/code-health/agents/security.md" \
+    "$target/.code-health/framework/.claude/agents/security.md" || \
+    fail 'installer did not restore the previous framework after failure'
+  if find "$target/.claude" -name '.code-health-copy.*' -print -quit | \
+    grep -q .; then
+    fail 'installer retained a temporary integration file after failure'
+  fi
+
+  "$installer" "$target" >/dev/null
+  cmp -s \
+    "$project_root/plugins/code-health/agents/security.md" \
+    "$target/.claude/agents/security.md" || \
+    fail 'installer upgrade was not retryable after integration failure'
+}
+
+test_rolls_back_new_framework_after_integration_failure() {
+  local target="$test_root/rolled-back-new-install-repository"
+  local output="$test_root/rolled-back-new-install-output.txt"
+  local injection_marker="$test_root/rolled-back-new-install-injection.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  if bash -c '
+    injection_marker=$3
+    cp() {
+      local source=$1
+      local destination=${!#}
+      if [[ $source == -p ]]; then
+        source=$2
+      fi
+      if [[ $source == */plugins/code-health/agents/reliability.md ]]; then
+        printf "partial copy\n" > "$destination"
+        printf "reached\n" > "$injection_marker"
+        return 73
+      fi
+      command cp "$@"
+    }
+
+    source "$1" "$2"
+  ' _ "$installer" "$target" "$injection_marker" > "$output" 2>&1; then
+    fail 'installer ignored an injected new-install copy failure'
+  fi
+  assert_file "$injection_marker"
+
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer retained a new framework after integration failure'
+  if find "$target/.claude" -type f -print -quit 2>/dev/null | grep -q .; then
+    fail 'installer retained managed Claude files after new-install failure'
+  fi
 }
 
 test_rejects_conflicting_claude_files_before_writing() {
@@ -203,6 +427,26 @@ test_rejects_symlinked_integration_directories() {
     fail 'installer did not explain the unsafe symbolic link'
 }
 
+test_rejects_non_directory_claude_ancestors_before_writing() {
+  local target="$test_root/non-directory-claude-repository"
+  local output="$test_root/non-directory-claude-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude"
+  touch "$target/.claude/agents"
+
+  if "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer accepted a non-directory Claude ancestor'
+  fi
+
+  [[ -f $target/.claude/agents ]] || \
+    fail 'installer changed the repository-owned Claude ancestor'
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer wrote framework files before rejecting a non-directory ancestor'
+  grep -Fq 'not a directory' "$output" || \
+    fail 'installer did not explain the non-directory Claude ancestor'
+}
+
 test_rejects_reversed_managed_markers_without_writing() {
   local target="$test_root/reversed-markers-repository"
   local expected="$test_root/reversed-markers-expected.txt"
@@ -246,8 +490,17 @@ test_rejects_non_repository_target() {
 
 test_installs_without_overwriting_and_is_repeatable
 test_upgrades_unmodified_installer_managed_files
+test_removes_obsolete_unmodified_installer_managed_files
+test_preserves_modified_obsolete_installer_managed_files
+test_preserves_identical_repository_owned_files_when_they_become_obsolete
+test_preserves_identical_repository_owned_files_during_content_upgrades
+test_preserves_ambiguous_obsolete_files_from_legacy_installations
+test_upgrades_unmodified_files_from_legacy_installations
+test_restores_previous_framework_after_integration_failure
+test_rolls_back_new_framework_after_integration_failure
 test_rejects_conflicting_claude_files_before_writing
 test_rejects_symlinked_integration_directories
+test_rejects_non_directory_claude_ancestors_before_writing
 test_rejects_reversed_managed_markers_without_writing
 test_rejects_non_repository_target
 

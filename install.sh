@@ -50,6 +50,27 @@ reject_target_symlinks() {
   done
 }
 
+reject_non_directory_ancestors() {
+  local relative_path=$1
+  local remaining=${relative_path%/*}
+  local current_path=$target_root
+  local component
+
+  [[ $remaining != "$relative_path" ]] || return 0
+  while [[ -n $remaining ]]; do
+    component=${remaining%%/*}
+    current_path="$current_path/$component"
+    if [[ -e $current_path && ! -d $current_path ]]; then
+      die "target integration path is not a directory: $current_path"
+    fi
+    if [[ $remaining == */* ]]; then
+      remaining=${remaining#*/}
+    else
+      remaining=''
+    fi
+  done
+}
+
 reject_target_symlinks 'AGENTS.md'
 reject_target_symlinks 'CLAUDE.md'
 reject_target_symlinks '.gitignore'
@@ -77,10 +98,33 @@ done
 framework_parent="$target_root/.code-health"
 framework_dir="$framework_parent/framework"
 managed_marker='.code-health-managed'
+managed_claude_manifest='.code-health-managed-claude-files'
 
 if [[ -e $framework_dir && ! -f $framework_dir/$managed_marker ]]; then
   die "existing framework directory is not installer-managed: $framework_dir"
 fi
+if [[ -e $framework_dir/$managed_claude_manifest && \
+  ( ! -f $framework_dir/$managed_claude_manifest || \
+    -L $framework_dir/$managed_claude_manifest ) ]]; then
+  die "invalid managed Claude file inventory: $framework_dir/$managed_claude_manifest"
+fi
+
+manifest_contains() {
+  local manifest=$1
+  local relative_path=$2
+
+  [[ -f $manifest ]] && grep -Fqx -- "$relative_path" "$manifest"
+}
+
+legacy_managed_file_matches() {
+  local relative_path=$1
+  local manifest="$framework_dir/$managed_claude_manifest"
+  local previous_file="$framework_dir/.claude/$relative_path"
+  local target_file="$target_root/.claude/$relative_path"
+
+  [[ ! -e $manifest && -f $previous_file && -f $target_file ]] && \
+    cmp -s "$previous_file" "$target_file"
+}
 
 validate_managed_block() {
   local file=$1
@@ -132,6 +176,7 @@ preflight_claude_file() {
   local previous_file="$framework_dir/.claude/$relative_path"
 
   reject_target_symlinks ".claude/$relative_path"
+  reject_non_directory_ancestors ".claude/$relative_path"
   [[ -e $target_file ]] || return 0
   [[ -f $target_file ]] || \
     die "Refusing to overwrite non-file Claude path: .claude/$relative_path"
@@ -140,7 +185,10 @@ preflight_claude_file() {
     return 0
   fi
   if [[ -f $framework_dir/$managed_marker && -f $previous_file ]] && \
-    cmp -s "$previous_file" "$target_file"; then
+    cmp -s "$previous_file" "$target_file" && \
+    { manifest_contains \
+        "$framework_dir/$managed_claude_manifest" "$relative_path" || \
+      legacy_managed_file_matches "$relative_path"; }; then
     return 0
   fi
 
@@ -150,6 +198,23 @@ preflight_claude_file() {
 while IFS= read -r claude_file; do
   preflight_claude_file "${claude_file#"$plugin_root/"}"
 done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
+
+if [[ -f $framework_dir/$managed_marker ]]; then
+  while IFS= read -r previous_file; do
+    relative_path=${previous_file#"$framework_dir/.claude/"}
+    [[ ! -e $plugin_root/$relative_path ]] || continue
+    manifest_contains \
+      "$framework_dir/$managed_claude_manifest" "$relative_path" || continue
+    target_file="$target_root/.claude/$relative_path"
+    reject_target_symlinks ".claude/$relative_path"
+    reject_non_directory_ancestors ".claude/$relative_path"
+    [[ ! -e $target_file || -f $target_file ]] || \
+      die "obsolete managed Claude path is not a file: .claude/$relative_path"
+  done < <(find \
+    "$framework_dir/.claude/skills" \
+    "$framework_dir/.claude/agents" \
+    -type f -print | sort)
+fi
 
 write_agents_block() {
   printf '%s\n' \
@@ -242,7 +307,52 @@ cleanup_staging() {
     rm -rf -- "$staging_dir"
   fi
 }
-trap cleanup_staging EXIT
+
+cleanup_failed_install() {
+  local relative_path
+  local source_file
+  local target_file
+
+  [[ ${framework_swapped:-0} -eq 1 ]] || return 0
+  [[ -f $framework_dir/$managed_marker ]] || {
+    printf 'Error: cannot roll back unmarked framework: %s\n' \
+      "$framework_dir" >&2
+    return 0
+  }
+
+  if [[ -z ${backup_dir:-} ]]; then
+    while IFS= read -r relative_path; do
+      source_file="$plugin_root/$relative_path"
+      target_file="$target_root/.claude/$relative_path"
+      if [[ -f $source_file && -f $target_file ]] && \
+        cmp -s "$source_file" "$target_file"; then
+        rm -f -- "$target_file"
+      fi
+    done < "$framework_dir/$managed_claude_manifest"
+  fi
+
+  if ! rm -rf -- "$framework_dir"; then
+    printf 'Error: could not remove failed framework payload: %s\n' \
+      "$framework_dir" >&2
+    return 0
+  fi
+
+  if [[ -n ${backup_dir:-} && -d $backup_dir ]]; then
+    if ! mv "$backup_dir" "$framework_dir"; then
+      printf 'Error: previous framework remains at %s\n' "$backup_dir" >&2
+    fi
+  fi
+}
+
+cleanup_install() {
+  local exit_status=$?
+
+  if [[ $exit_status -ne 0 ]]; then
+    cleanup_failed_install
+  fi
+  cleanup_staging
+}
+trap cleanup_install EXIT
 
 cp "$plugin_root/framework/AGENTS.md" "$staging_dir/AGENTS.md"
 cp "$plugin_root/framework/CLAUDE.md" "$staging_dir/CLAUDE.md"
@@ -260,10 +370,23 @@ mkdir -p "$staging_dir/.claude"
 cp -R "$plugin_root/agents" "$staging_dir/.claude/agents"
 cp -R "$plugin_root/skills" "$staging_dir/.claude/skills"
 printf 'managed-by=code-health-installer\n' > "$staging_dir/$managed_marker"
+: > "$staging_dir/$managed_claude_manifest"
+while IFS= read -r claude_file; do
+  relative_path=${claude_file#"$plugin_root/"}
+  target_file="$target_root/.claude/$relative_path"
+  if manifest_contains \
+    "$framework_dir/$managed_claude_manifest" "$relative_path" || \
+    legacy_managed_file_matches "$relative_path" || \
+    [[ ! -e $target_file ]]; then
+    printf '%s\n' "$relative_path" >> \
+      "$staging_dir/$managed_claude_manifest"
+  fi
+done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
 chmod +x "$staging_dir/install.sh"
 chmod +x "$staging_dir/scripts/code-health/collect-baseline.sh"
 
 backup_dir=''
+framework_swapped=0
 if [[ -d $framework_dir ]]; then
   backup_dir=$(mktemp -d "$framework_parent/.framework-backup.XXXXXX")
   rmdir "$backup_dir"
@@ -277,19 +400,54 @@ if ! mv "$staging_dir" "$framework_dir"; then
   die 'could not install the staged framework payload'
 fi
 staging_dir=''
+framework_swapped=1
 
-if [[ -n $backup_dir && -d $backup_dir ]]; then
-  [[ -f $backup_dir/$managed_marker ]] || \
-    die "refusing to remove unmarked framework backup: $backup_dir"
-  rm -rf -- "$backup_dir"
-fi
+install_claude_file() {
+  local source_file=$1
+  local relative_path=${source_file#"$plugin_root/"}
+  local target_file="$target_root/.claude/$relative_path"
+  local target_parent
+  local temporary_file
+
+  manifest_contains \
+    "$framework_dir/$managed_claude_manifest" "$relative_path" || return 0
+
+  target_parent=$(dirname "$target_file")
+  mkdir -p "$target_parent"
+  temporary_file=$(mktemp "$target_parent/.code-health-copy.XXXXXX")
+  if ! cp -p "$source_file" "$temporary_file"; then
+    rm -f -- "$temporary_file"
+    return 1
+  fi
+  if ! mv "$temporary_file" "$target_file"; then
+    rm -f -- "$temporary_file"
+    return 1
+  fi
+}
 
 while IFS= read -r claude_file; do
-  relative_path=${claude_file#"$plugin_root/"}
-  target_file="$target_root/.claude/$relative_path"
-  mkdir -p "$(dirname "$target_file")"
-  cp "$claude_file" "$target_file"
+  install_claude_file "$claude_file"
 done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
+
+if [[ -n $backup_dir && -d $backup_dir ]]; then
+  while IFS= read -r previous_file; do
+    relative_path=${previous_file#"$backup_dir/.claude/"}
+    [[ ! -e $plugin_root/$relative_path ]] || continue
+    manifest_contains \
+      "$backup_dir/$managed_claude_manifest" "$relative_path" || continue
+    target_file="$target_root/.claude/$relative_path"
+    [[ -f $target_file ]] || continue
+    if cmp -s "$previous_file" "$target_file"; then
+      rm -f -- "$target_file"
+    else
+      printf 'Preserving modified obsolete Claude file: .claude/%s\n' \
+        "$relative_path" >&2
+    fi
+  done < <(find \
+    "$backup_dir/.claude/skills" \
+    "$backup_dir/.claude/agents" \
+    -type f -print | sort)
+fi
 
 upsert_managed_block "$target_root/AGENTS.md" \
   '<!-- code-health:start -->' '<!-- code-health:end -->' write_agents_block
@@ -297,6 +455,13 @@ upsert_managed_block "$target_root/CLAUDE.md" \
   '<!-- code-health:start -->' '<!-- code-health:end -->' write_claude_block
 upsert_managed_block "$target_root/.gitignore" \
   '# code-health:start' '# code-health:end' write_gitignore_block
+
+if [[ -n $backup_dir && -d $backup_dir ]]; then
+  [[ -f $backup_dir/$managed_marker ]] || \
+    die "refusing to remove unmarked framework backup: $backup_dir"
+  rm -rf -- "$backup_dir"
+fi
+framework_swapped=0
 
 printf 'Code-health framework installed in %s\n' "$framework_dir"
 printf 'Baseline collector: %s\n' \

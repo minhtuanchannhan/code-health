@@ -23,9 +23,9 @@ minhtuanchannhan
 ## URLs
 
 - Website: https://github.com/minhtuanchannhan/code-health
-- Support: https://github.com/minhtuanchannhan/code-health/blob/main/SUPPORT.md
-- Privacy: https://github.com/minhtuanchannhan/code-health/blob/main/PRIVACY.md
-- Terms: https://github.com/minhtuanchannhan/code-health/blob/main/TERMS.md
+- Support: https://github.com/minhtuanchannhan/code-health/blob/master/SUPPORT.md
+- Privacy: https://github.com/minhtuanchannhan/code-health/blob/master/PRIVACY.md
+- Terms: https://github.com/minhtuanchannhan/code-health/blob/master/TERMS.md
 
 ## Starter prompts
 

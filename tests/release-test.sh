@@ -50,6 +50,7 @@ import json
 import filecmp
 import pathlib
 import re
+import stat
 import struct
 import sys
 
@@ -62,17 +63,45 @@ def load_json(path):
         return json.load(handle)
 
 
+def assert_tree_matches(source, mirror):
+    source_files = {
+        path.relative_to(source) for path in source.rglob("*") if path.is_file()
+    }
+    mirror_files = {
+        path.relative_to(mirror) for path in mirror.rglob("*") if path.is_file()
+    }
+    assert source_files == mirror_files, (
+        f"tree mismatch: {source} != {mirror}; "
+        f"source-only={sorted(map(str, source_files - mirror_files))}; "
+        f"mirror-only={sorted(map(str, mirror_files - source_files))}"
+    )
+    for relative_path in sorted(source_files):
+        source_file = source / relative_path
+        mirror_file = mirror / relative_path
+        assert filecmp.cmp(source_file, mirror_file, shallow=False), (
+            f"stale mirror: {mirror_file}"
+        )
+        source_executable = bool(source_file.stat().st_mode & stat.S_IXUSR)
+        mirror_executable = bool(mirror_file.stat().st_mode & stat.S_IXUSR)
+        assert source_executable == mirror_executable, (
+            f"executable-mode mismatch: {source_file} != {mirror_file}"
+        )
+
+
 claude_manifest = load_json(plugin / ".claude-plugin" / "plugin.json")
 codex_manifest = load_json(plugin / ".codex-plugin" / "plugin.json")
 claude_marketplace = load_json(root / ".claude-plugin" / "marketplace.json")
 codex_marketplace = load_json(root / ".agents" / "plugins" / "marketplace.json")
 test_cases = load_json(plugin / "submission" / "openai-test-cases.json")
+release_notes = (plugin / "submission" / "release-notes.md").read_text(
+    encoding="utf-8"
+)
 
-expected_version = "0.1.0"
+expected_version = codex_manifest["version"]
+assert re.fullmatch(r"\d+\.\d+\.\d+", expected_version)
 for manifest in (claude_manifest, codex_manifest):
     assert manifest["name"] == "code-health"
     assert manifest["version"] == expected_version
-    assert re.fullmatch(r"\d+\.\d+\.\d+", manifest["version"])
     assert manifest["description"].strip()
     assert manifest["author"]["name"] == "minhtuanchannhan"
     assert manifest["repository"] == "https://github.com/minhtuanchannhan/code-health"
@@ -106,6 +135,11 @@ assert all(len(prompt) <= 128 for prompt in interface["defaultPrompt"])
 
 for key in ("websiteURL", "privacyPolicyURL", "termsOfServiceURL"):
     assert interface[key].startswith("https://")
+expected_document_root = (
+    "https://github.com/minhtuanchannhan/code-health/blob/master"
+)
+assert interface["privacyPolicyURL"] == f"{expected_document_root}/PRIVACY.md"
+assert interface["termsOfServiceURL"] == f"{expected_document_root}/TERMS.md"
 for key in ("composerIcon", "logo"):
     asset = plugin / interface[key].removeprefix("./")
     assert asset.is_file(), f"missing manifest asset: {asset}"
@@ -117,6 +151,9 @@ claude_entry = claude_marketplace["plugins"][0]
 assert claude_entry["name"] == "code-health"
 assert claude_entry["source"] == "./plugins/code-health"
 assert claude_entry["version"] == expected_version
+release_version = re.search(r"^## (\d+\.\d+\.\d+)$", release_notes, re.MULTILINE)
+assert release_version, "release notes must start with a semantic version heading"
+assert release_version.group(1) == expected_version
 
 assert codex_marketplace["name"] == "code-health"
 assert codex_marketplace["interface"]["displayName"] == "Code Health"
@@ -151,13 +188,11 @@ assert width >= 512 and height >= 512
 assert bit_depth == 8
 assert color_type in (4, 6), "logo must preserve transparency"
 
-assert filecmp.cmp(
-    root / ".claude" / "skills" / "code-health" / "SKILL.md",
-    plugin / "skills" / "code-health" / "SKILL.md",
-    shallow=False,
+assert_tree_matches(
+    root / ".claude" / "skills" / "code-health",
+    plugin / "skills" / "code-health",
 )
-for agent in (root / ".claude" / "agents").glob("*.md"):
-    assert filecmp.cmp(agent, plugin / "agents" / agent.name, shallow=False)
+assert_tree_matches(root / ".claude" / "agents", plugin / "agents")
 
 mirrored_contracts = {
     root / "AGENTS.md": [plugin / "framework" / "AGENTS.md"],

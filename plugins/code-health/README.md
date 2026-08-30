@@ -16,7 +16,7 @@ The skill performs discovery directly in runtimes without subagent support. In C
 Project links:
 
 - [Documentation](https://github.com/minhtuanchannhan/code-health#readme)
-- [Privacy](https://github.com/minhtuanchannhan/code-health/blob/main/PRIVACY.md)
-- [Terms](https://github.com/minhtuanchannhan/code-health/blob/main/TERMS.md)
-- [Support](https://github.com/minhtuanchannhan/code-health/blob/main/SUPPORT.md)
+- [Privacy](https://github.com/minhtuanchannhan/code-health/blob/master/PRIVACY.md)
+- [Terms](https://github.com/minhtuanchannhan/code-health/blob/master/TERMS.md)
+- [Support](https://github.com/minhtuanchannhan/code-health/blob/master/SUPPORT.md)
 - [MIT License](LICENSE)
