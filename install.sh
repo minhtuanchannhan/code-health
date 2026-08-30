@@ -50,6 +50,27 @@ reject_target_symlinks() {
   done
 }
 
+reject_non_directory_ancestors() {
+  local relative_path=$1
+  local remaining=${relative_path%/*}
+  local current_path=$target_root
+  local component
+
+  [[ $remaining != "$relative_path" ]] || return 0
+  while [[ -n $remaining ]]; do
+    component=${remaining%%/*}
+    current_path="$current_path/$component"
+    if [[ -e $current_path && ! -d $current_path ]]; then
+      die "target integration path is not a directory: $current_path"
+    fi
+    if [[ $remaining == */* ]]; then
+      remaining=${remaining#*/}
+    else
+      remaining=''
+    fi
+  done
+}
+
 reject_target_symlinks 'AGENTS.md'
 reject_target_symlinks 'CLAUDE.md'
 reject_target_symlinks '.gitignore'
@@ -132,6 +153,7 @@ preflight_claude_file() {
   local previous_file="$framework_dir/.claude/$relative_path"
 
   reject_target_symlinks ".claude/$relative_path"
+  reject_non_directory_ancestors ".claude/$relative_path"
   [[ -e $target_file ]] || return 0
   [[ -f $target_file ]] || \
     die "Refusing to overwrite non-file Claude path: .claude/$relative_path"
@@ -150,6 +172,21 @@ preflight_claude_file() {
 while IFS= read -r claude_file; do
   preflight_claude_file "${claude_file#"$plugin_root/"}"
 done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
+
+if [[ -f $framework_dir/$managed_marker ]]; then
+  while IFS= read -r previous_file; do
+    relative_path=${previous_file#"$framework_dir/.claude/"}
+    [[ ! -e $plugin_root/$relative_path ]] || continue
+    target_file="$target_root/.claude/$relative_path"
+    reject_target_symlinks ".claude/$relative_path"
+    reject_non_directory_ancestors ".claude/$relative_path"
+    [[ ! -e $target_file || -f $target_file ]] || \
+      die "obsolete managed Claude path is not a file: .claude/$relative_path"
+  done < <(find \
+    "$framework_dir/.claude/skills" \
+    "$framework_dir/.claude/agents" \
+    -type f -print | sort)
+fi
 
 write_agents_block() {
   printf '%s\n' \
@@ -278,12 +315,6 @@ if ! mv "$staging_dir" "$framework_dir"; then
 fi
 staging_dir=''
 
-if [[ -n $backup_dir && -d $backup_dir ]]; then
-  [[ -f $backup_dir/$managed_marker ]] || \
-    die "refusing to remove unmarked framework backup: $backup_dir"
-  rm -rf -- "$backup_dir"
-fi
-
 while IFS= read -r claude_file; do
   relative_path=${claude_file#"$plugin_root/"}
   target_file="$target_root/.claude/$relative_path"
@@ -291,12 +322,36 @@ while IFS= read -r claude_file; do
   cp "$claude_file" "$target_file"
 done < <(find "$plugin_root/skills" "$plugin_root/agents" -type f -print | sort)
 
+if [[ -n $backup_dir && -d $backup_dir ]]; then
+  while IFS= read -r previous_file; do
+    relative_path=${previous_file#"$backup_dir/.claude/"}
+    [[ ! -e $plugin_root/$relative_path ]] || continue
+    target_file="$target_root/.claude/$relative_path"
+    [[ -f $target_file ]] || continue
+    if cmp -s "$previous_file" "$target_file"; then
+      rm -f -- "$target_file"
+    else
+      printf 'Preserving modified obsolete Claude file: .claude/%s\n' \
+        "$relative_path" >&2
+    fi
+  done < <(find \
+    "$backup_dir/.claude/skills" \
+    "$backup_dir/.claude/agents" \
+    -type f -print | sort)
+fi
+
 upsert_managed_block "$target_root/AGENTS.md" \
   '<!-- code-health:start -->' '<!-- code-health:end -->' write_agents_block
 upsert_managed_block "$target_root/CLAUDE.md" \
   '<!-- code-health:start -->' '<!-- code-health:end -->' write_claude_block
 upsert_managed_block "$target_root/.gitignore" \
   '# code-health:start' '# code-health:end' write_gitignore_block
+
+if [[ -n $backup_dir && -d $backup_dir ]]; then
+  [[ -f $backup_dir/$managed_marker ]] || \
+    die "refusing to remove unmarked framework backup: $backup_dir"
+  rm -rf -- "$backup_dir"
+fi
 
 printf 'Code-health framework installed in %s\n' "$framework_dir"
 printf 'Baseline collector: %s\n' \

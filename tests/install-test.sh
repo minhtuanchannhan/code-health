@@ -46,6 +46,16 @@ create_repository() {
   git init -q "$1"
 }
 
+copy_installer_release() {
+  local destination=$1
+
+  mkdir -p "$destination/plugins"
+  cp "$project_root/README.md" "$destination/README.md"
+  cp "$project_root/install.sh" "$destination/install.sh"
+  cp -R "$project_root/plugins/code-health" \
+    "$destination/plugins/code-health"
+}
+
 test_installs_without_overwriting_and_is_repeatable() {
   local target="$test_root/target repository"
   local agents_permissions
@@ -141,10 +151,7 @@ test_upgrades_unmodified_installer_managed_files() {
   assert_equals "$(permission_bits "$target/CLAUDE.md")" '644'
   assert_equals "$(permission_bits "$target/.gitignore")" '644'
 
-  mkdir -p "$release/plugins"
-  cp "$project_root/README.md" "$release/README.md"
-  cp "$project_root/install.sh" "$release/install.sh"
-  cp -R "$project_root/plugins/code-health" "$release/plugins/code-health"
+  copy_installer_release "$release"
   printf '\nUpgrade fixture.\n' >> \
     "$release/plugins/code-health/agents/security.md"
 
@@ -158,6 +165,46 @@ test_upgrades_unmodified_installer_managed_files() {
     "$release/plugins/code-health/agents/security.md" \
     "$target/.code-health/framework/.claude/agents/security.md" || \
     fail 'canonical framework did not receive the upgraded Claude file'
+}
+
+test_removes_obsolete_unmodified_installer_managed_files() {
+  local target="$test_root/obsolete-managed-file-repository"
+  local old_release="$test_root/old-release"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  assert_file "$target/.claude/agents/obsolete.md"
+
+  "$installer" "$target" >/dev/null
+
+  [[ ! -e $target/.claude/agents/obsolete.md ]] || \
+    fail 'installer retained an obsolete unmodified managed Claude file'
+}
+
+test_preserves_modified_obsolete_installer_managed_files() {
+  local target="$test_root/modified-obsolete-managed-file-repository"
+  local old_release="$test_root/modified-old-release"
+  local output="$test_root/modified-obsolete-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+
+  copy_installer_release "$old_release"
+  touch "$old_release/plugins/code-health/agents/obsolete.md"
+
+  "$old_release/install.sh" "$target" >/dev/null
+  printf 'repository-owned replacement\n' > \
+    "$target/.claude/agents/obsolete.md"
+
+  "$installer" "$target" > "$output" 2>&1
+
+  assert_contains_line "$target/.claude/agents/obsolete.md" \
+    'repository-owned replacement'
+  grep -Fq 'Preserving modified obsolete Claude file' "$output" || \
+    fail 'installer did not explain why it preserved a modified obsolete file'
 }
 
 test_rejects_conflicting_claude_files_before_writing() {
@@ -203,6 +250,26 @@ test_rejects_symlinked_integration_directories() {
     fail 'installer did not explain the unsafe symbolic link'
 }
 
+test_rejects_non_directory_claude_ancestors_before_writing() {
+  local target="$test_root/non-directory-claude-repository"
+  local output="$test_root/non-directory-claude-output.txt"
+  create_repository "$target"
+  target=$(cd "$target" && pwd -P)
+  mkdir -p "$target/.claude"
+  touch "$target/.claude/agents"
+
+  if "$installer" "$target" > "$output" 2>&1; then
+    fail 'installer accepted a non-directory Claude ancestor'
+  fi
+
+  [[ -f $target/.claude/agents ]] || \
+    fail 'installer changed the repository-owned Claude ancestor'
+  [[ ! -e $target/.code-health/framework ]] || \
+    fail 'installer wrote framework files before rejecting a non-directory ancestor'
+  grep -Fq 'not a directory' "$output" || \
+    fail 'installer did not explain the non-directory Claude ancestor'
+}
+
 test_rejects_reversed_managed_markers_without_writing() {
   local target="$test_root/reversed-markers-repository"
   local expected="$test_root/reversed-markers-expected.txt"
@@ -246,8 +313,11 @@ test_rejects_non_repository_target() {
 
 test_installs_without_overwriting_and_is_repeatable
 test_upgrades_unmodified_installer_managed_files
+test_removes_obsolete_unmodified_installer_managed_files
+test_preserves_modified_obsolete_installer_managed_files
 test_rejects_conflicting_claude_files_before_writing
 test_rejects_symlinked_integration_directories
+test_rejects_non_directory_claude_ancestors_before_writing
 test_rejects_reversed_managed_markers_without_writing
 test_rejects_non_repository_target
 
