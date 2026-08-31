@@ -8,7 +8,7 @@ The framework reviews security, reliability, architecture, maintainability, perf
 
 ## Install from a marketplace
 
-After this repository is public on GitHub, Claude Code users can add it as a marketplace and install the plugin:
+Claude Code users can add this repository as a marketplace and install the plugin:
 
 ```text
 /plugin marketplace add minhtuanchannhan/code-health
